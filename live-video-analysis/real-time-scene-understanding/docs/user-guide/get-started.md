@@ -49,7 +49,7 @@ The setup template sets these important values:
 | `TAG` | `latest` | Docker image tag. |
 | `PORT` | `9100` | Host port for the dashboard and REST API. Add this to `.env` to change the published host port; the container port remains `9100`. |
 | `DASHBOARD_PORT` | `9100` | Internal backend port. Compose currently fixes this to `9100`; changing the `.env.example` value does not change the published host port. |
-| `ALERT_VLM_MODEL` |`Qwen/Qwen3-VL-2B-Instruct` | Model used for the alert pipeline VLM inference. |
+| `ALERT_VLM_MODEL` | `Qwen/Qwen3-VL-2B-Instruct` | Model used for the alert pipeline VLM inference. |
 | `ALERT_VLM_DEVICE` | `CPU` | Device for alert VLM inference: CPU, GPU, or NPU. NPU requires a compatible model with `int4` quantization. |
 | `ALERT_VLM_INTERVAL` | `2.0` | Interval (in seconds) between alert pipeline VLM inferences. |
 | `ALERT_VLM_MAX_TOKENS` | `128` | Maximum number of tokens for the alert pipeline VLM inference. |
