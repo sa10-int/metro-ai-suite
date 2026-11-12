@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -79,6 +80,11 @@ class AlertIndexStore:
         if not stream_id or not self._is_retained(record):
             return
         with self._lock:
+            timings = record.setdefault("timings", {})
+            timings["alert_indexed_ts"] = time.time()
+            metrics = record.get("metrics")
+            if isinstance(metrics, dict):
+                metrics["timings"] = dict(timings)
             entries = self._by_stream.setdefault(stream_id, [])
             entries.insert(0, record)
             del entries[settings.ALERT_INDEX_MAX_PER_STREAM :]

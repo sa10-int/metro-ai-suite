@@ -141,12 +141,59 @@ Notes:
 		"ttft_ms": 70.2,
 		"throughput_tps": 50.4
 	},
+	"timings": {
+		"trigger_caption_ts": 1788791840.1,
+		"segment_finalized_ts": 1788791845.0,
+		"segment_finalize_wait_ms": 4900.0,
+		"analysis_enqueued_ts": 1788791845.0,
+		"analysis_started_ts": 1788791845.2,
+		"queue_wait_ms": 200.0,
+		"segment_ready_ts": 1788791845.3,
+		"segment_readiness_wait_ms": 100.0,
+		"frame_sampling_started_ts": 1788791845.3,
+		"frame_sampling_completed_ts": 1788791845.6,
+		"frame_sampling_duration_ms": 300.0,
+		"generation_started_ts": 1788791845.6,
+		"generation_completed_ts": 1788791857.6,
+		"generation_duration_ms": 12000.0,
+		"storage_upload_started_ts": 1788791857.6,
+		"storage_upload_completed_ts": 1788791858.1,
+		"storage_upload_duration_ms": 500.0,
+		"alert_indexed_ts": 1788791858.1
+	},
 	"model": "Qwen/Qwen3-VL-8B-Instruct",
 	"device": "GPU",
 	"uploaded_at": "2026-09-07T10:17:40.100000+00:00",
 	"video_url": "/api/streams/camera-lobby/alerts/9dd96a2f-17b9-41a0-a1c5-e3f8f76b07a7/video"
 }
 ```
+
+In alert details, `timings` fields ending in `_ts` are Unix timestamps in
+seconds; fields ending in `_ms` are durations in milliseconds. `uploaded_at`
+is retained for compatibility and is set before the storage upload tasks begin.
+Use `timings.storage_upload_completed_ts` for artifact-upload completion and
+`timings.alert_indexed_ts` for the server-side alert-index insertion time.
+
+| Field | Stage | Purpose |
+| --- | --- | --- |
+| `trigger_caption_ts` | Alert VLM | Time the alert caption was produced; reference point for segment-finalization wait. |
+| `segment_finalized_ts` | Stream/segment handoff | Time the segment containing the trigger frame was finalized. |
+| `segment_finalize_wait_ms` | Alert-to-segment handoff | Time from the alert caption to segment finalization. |
+| `analysis_enqueued_ts` | Deep analyzer | Time the finalized-segment job entered the work queue. |
+| `analysis_started_ts` | Deep analyzer | Time the worker began processing the job. |
+| `queue_wait_ms` | Deep analyzer | Time the job waited in the work queue. |
+| `segment_ready_ts` | Deep analyzer | Time the finalized segment became safe to read. |
+| `segment_readiness_wait_ms` | Deep analyzer | Time spent waiting for the segment file to become readable. |
+| `frame_sampling_started_ts` | Deep analyzer | Time frame extraction and sampling began. |
+| `frame_sampling_completed_ts` | Deep analyzer | Time frame extraction and sampling ended. |
+| `frame_sampling_duration_ms` | Deep analyzer | Time spent reading and sampling segment frames. |
+| `generation_started_ts` | Deep analyzer | Time model generation began. |
+| `generation_completed_ts` | Deep analyzer | Time model generation ended. |
+| `generation_duration_ms` | Deep analyzer | Time spent generating the analysis. |
+| `storage_upload_started_ts` | Storage | Time artifact uploads were dispatched. |
+| `storage_upload_completed_ts` | Storage | Time all artifact upload tasks completed. |
+| `storage_upload_duration_ms` | Storage | Total duration of the artifact upload tasks. |
+| `alert_indexed_ts` | API/index | Time the completed alert was inserted into the app's alert index. |
 
 #### Alerts Query Parameters
 

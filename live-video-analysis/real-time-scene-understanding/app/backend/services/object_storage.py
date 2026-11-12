@@ -205,12 +205,16 @@ class SeaweedFSStorage:
         metrics: dict[str, Any],
         deep_model: str,
         deep_device: str,
+        timings: dict[str, float] | None = None,
         trigger_caption: str = "",
         trigger_thumbnail_jpeg: bytes = b"",
     ) -> dict[str, Any] | None:
         if not os.path.isfile(segment_path):
             logger.warning("[%s] seaweedfs upload skipped; segment not found: %s", stream_id, segment_path)
             return None
+
+        timings = timings if timings is not None else {}
+        metrics["timings"] = dict(timings)
 
         video_key, sidecar_key, thumbnail_key = self._build_object_keys(stream_id, segment_path, frame_id)
         has_thumbnail = bool(trigger_thumbnail_jpeg)
@@ -244,6 +248,7 @@ class SeaweedFSStorage:
             "confirmed": confirmed,
             "description": description,
             "metrics": metrics,
+            "timings": dict(timings),
             "model": deep_model,
             "device": deep_device,
             "uploaded_at": datetime.now(timezone.utc).isoformat(),
@@ -251,8 +256,6 @@ class SeaweedFSStorage:
             "thumbnail_object_key": thumbnail_key if has_thumbnail else "",
             "sidecar_key": sidecar_key,
         }
-        sidecar_body = json.dumps(payload, ensure_ascii=True).encode("utf-8")
-
         def _upload_sidecar() -> None:
             self._client.put_object(
                 Bucket=settings.SEAWEEDFS_BUCKET,
@@ -269,6 +272,12 @@ class SeaweedFSStorage:
                 ContentType="image/jpeg",
             )
 
+        sidecar_body = json.dumps(payload, ensure_ascii=True).encode("utf-8")
+
+        timings["storage_upload_started_ts"] = time.time()
+        upload_started_monotonic = time.perf_counter()
+        payload["timings"] = dict(timings)
+        metrics["timings"] = dict(timings)
         futures = [
             self._upload_executor.submit(self._run_with_retries, _upload_video, "upload_video"),
             self._upload_executor.submit(self._run_with_retries, _upload_sidecar, "upload_sidecar"),
@@ -279,6 +288,13 @@ class SeaweedFSStorage:
             )
         for future in futures:
             future.result()
+
+        timings["storage_upload_completed_ts"] = time.time()
+        timings["storage_upload_duration_ms"] = max(
+            0.0, (time.perf_counter() - upload_started_monotonic) * 1000.0
+        )
+        metrics["timings"] = dict(timings)
+        payload["timings"] = dict(timings)
 
         logger.info(
             "[%s] seaweedfs upload complete bucket=%s key=%s sidecar=%s",

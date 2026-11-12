@@ -53,6 +53,7 @@ class TestAdd:
         store.add(newer)
 
         assert [r["frame_id"] for r in store._by_stream["stream-a"]] == ["newer", "older"]
+        assert isinstance(newer["timings"]["alert_indexed_ts"], float)
 
     def test_add_ignores_falsy_record(self):
         store = AlertIndexStore()

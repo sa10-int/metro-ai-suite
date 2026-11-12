@@ -30,6 +30,7 @@ def _alert_record(**overrides) -> dict:
         "video_object_key": "cam-1/frame-1.mp4",
         "description": "Smoke visible near the entrance.",
         "metrics": {"ttft_ms": 10.0},
+        "timings": {"queue_wait_ms": 12.5},
         "model": "InternVL2-1B",
         "device": "NPU",
         "uploaded_at": "2026-01-01T00:00:00Z",
@@ -77,6 +78,7 @@ class TestAlertDetail:
         body = response.json()
         assert response.status_code == 200
         assert body["description"] == "Smoke visible near the entrance."
+        assert body["timings"] == {"queue_wait_ms": 12.5}
         assert body["video_url"] == "/api/streams/cam-1/alerts/frame-1/video"
 
     def test_returns_404_when_alert_not_found(self):

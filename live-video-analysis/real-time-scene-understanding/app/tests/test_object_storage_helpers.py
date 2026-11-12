@@ -167,10 +167,14 @@ class TestStorageRetryAndBucketSetup:
             metrics={"frames_sampled": 5.0},
             deep_model="model",
             deep_device="cpu",
+            timings={},
         )
 
         assert payload is not None
         assert payload["stream_id"] == "stream-1"
         assert payload["description"] == "Visible fire."
+        assert "storage_upload_started_ts" in payload["timings"]
+        assert "storage_upload_completed_ts" in payload["timings"]
+        assert payload["timings"]["storage_upload_duration_ms"] >= 0
         assert len(calls) >= 2
         storage._upload_executor.shutdown(wait=True)

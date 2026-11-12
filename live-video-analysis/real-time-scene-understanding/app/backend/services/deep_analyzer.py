@@ -38,6 +38,7 @@ import time
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass
+from dataclasses import field
 from typing import Optional
 
 import av
@@ -82,6 +83,8 @@ class _AnalysisJob:
     deep_prompt: str = ""
     trigger_caption: str = ""
     trigger_thumbnail_jpeg: bytes = b""
+    timings: dict[str, float] = field(default_factory=dict)
+    enqueued_monotonic: Optional[float] = None
 
 
 def _sample_segment_frames(segment_path: str, max_frames: int) -> "np.ndarray":
@@ -136,7 +139,7 @@ class DeepAnalyzerEngine:
         self._dedup: "OrderedDict[str, None]" = OrderedDict()
         # Segment paths confirmed finalized (rotated out by the writer) but
         # with no pending job for them (yet, or ever). Bounded FIFO eviction.
-        self._finalized: "OrderedDict[str, None]" = OrderedDict()
+        self._finalized: "OrderedDict[str, float]" = OrderedDict()
         # Jobs whose "Yes" verdict arrived before their segment finalized.
         self._pending: dict[str, _AnalysisJob] = {}
         # Segments with an outstanding job: pending, queued for dispatch, or
@@ -216,6 +219,16 @@ class DeepAnalyzerEngine:
         stats["active"] = stats["queued"] + stats["in_flight"]
         return stats
 
+    def _enqueue_job(self, job: _AnalysisJob, finalized_ts: Optional[float]) -> None:
+        if finalized_ts is not None:
+            job.timings["segment_finalized_ts"] = finalized_ts
+            trigger_ts = job.timings.get("trigger_caption_ts")
+            if trigger_ts is not None:
+                job.timings["segment_finalize_wait_ms"] = max(0.0, (finalized_ts - trigger_ts) * 1000.0)
+        job.timings["analysis_enqueued_ts"] = time.time()
+        job.enqueued_monotonic = time.perf_counter()
+        self._queue.put(job)
+
     def submit(
         self,
         stream_id: str,
@@ -225,6 +238,7 @@ class DeepAnalyzerEngine:
         deep_prompt: str = "",
         trigger_caption: str = "",
         trigger_thumbnail_jpeg: bytes = b"",
+        trigger_caption_ts: Optional[float] = None,
     ) -> None:
         """Register a "Yes"-verdict segment for deep analysis, at most once."""
         job = _AnalysisJob(
@@ -236,6 +250,7 @@ class DeepAnalyzerEngine:
             trigger_caption=trigger_caption,
             trigger_thumbnail_jpeg=trigger_thumbnail_jpeg,
         )
+        job.timings["trigger_caption_ts"] = trigger_caption_ts if trigger_caption_ts is not None else time.time()
         with self._lock:
             if segment_path in self._dedup:
                 return  # already queued/pending/done — don't waste compute
@@ -245,7 +260,9 @@ class DeepAnalyzerEngine:
             stats["submitted"] += 1
             stats["queued"] += 1
 
-            if segment_path not in self._finalized:
+            is_finalized = segment_path in self._finalized
+            finalized_ts = self._finalized.get(segment_path)
+            if not is_finalized:
                 # Still being written; hold until on_segment_finalized() fires.
                 self._pending[segment_path] = job
                 logger.info(
@@ -255,16 +272,19 @@ class DeepAnalyzerEngine:
                 )
                 return
 
-        self._queue.put(job)
+        self._enqueue_job(job, finalized_ts)
         logger.info("[%s] deep-analysis queued: %s", stream_id, segment_path)
 
     def on_segment_finalized(self, segment_path: str) -> None:
         """Signal that a segment has rotated out and is now safe to read."""
+        finalized_ts = time.time()
         with self._lock:
-            self._mark(self._finalized, segment_path)
+            self._finalized[segment_path] = finalized_ts
+            if len(self._finalized) > settings.DEEP_ANALYZER_DEDUP_CACHE_SIZE:
+                self._finalized.popitem(last=False)
             job = self._pending.pop(segment_path, None)
         if job is not None:
-            self._queue.put(job)
+            self._enqueue_job(job, finalized_ts)
             logger.info("[%s] deep-analysis queued (segment finalized): %s", job.stream_id, segment_path)
 
     def is_segment_active(self, segment_path: str) -> bool:
@@ -283,6 +303,12 @@ class DeepAnalyzerEngine:
     def _dispatch_loop(self) -> None:
         while True:
             job = self._queue.get()
+            analysis_started_monotonic = time.perf_counter()
+            job.timings["analysis_started_ts"] = time.time()
+            if job.enqueued_monotonic is not None:
+                job.timings["queue_wait_ms"] = max(
+                    0.0, (analysis_started_monotonic - job.enqueued_monotonic) * 1000.0
+                )
             with self._lock:
                 stats = self._stream_stats(job.stream_id)
                 stats["queued"] = max(0, stats["queued"] - 1)
@@ -313,12 +339,24 @@ class DeepAnalyzerEngine:
         first waits for ground-truth proof (the next segment existing) before
         even trying, then still tolerates a residual open-file race with retries.
         """
+        readiness_started = time.perf_counter()
         self._wait_for_next_segment(job)
+        job.timings["segment_ready_ts"] = time.time()
+        job.timings["segment_readiness_wait_ms"] = max(
+            0.0, (time.perf_counter() - readiness_started) * 1000.0
+        )
 
         max_retries = settings.DEEP_ANALYZER_SEGMENT_READ_MAX_RETRIES
+        sampling_started = time.perf_counter()
+        job.timings["frame_sampling_started_ts"] = time.time()
         for attempt in range(1, max_retries + 1):
             try:
-                return _sample_segment_frames(job.segment_path, settings.DEEP_ANALYZER_MAX_FRAMES)
+                frames = _sample_segment_frames(job.segment_path, settings.DEEP_ANALYZER_MAX_FRAMES)
+                job.timings["frame_sampling_completed_ts"] = time.time()
+                job.timings["frame_sampling_duration_ms"] = max(
+                    0.0, (time.perf_counter() - sampling_started) * 1000.0
+                )
+                return frames
             except Exception as exc:  # noqa: BLE001 - av raises FFmpegError/OSError/ValueError depending on how incomplete the file is
                 if attempt >= max_retries:
                     logger.error(
@@ -375,9 +413,12 @@ class DeepAnalyzerEngine:
         if settings.DEEP_ANALYZER_STRUCTURED_OUTPUT:
             self._gen_config.structured_output_config = self._structured_output_config()
 
+        job.timings["generation_started_ts"] = time.time()
         t0 = time.perf_counter()
         result = self._pipe.generate(prompt, videos=[tensor], generation_config=self._gen_config)
         total_duration_ms = (time.perf_counter() - t0) * 1000.0
+        job.timings["generation_completed_ts"] = time.time()
+        job.timings["generation_duration_ms"] = total_duration_ms
 
         raw_description = DeepAnalyzerVLMRuntime.extract_text(result)
         confirmed, description = self._parse_analysis_result(raw_description)
@@ -430,8 +471,12 @@ class DeepAnalyzerEngine:
                 metrics=metrics,
                 deep_model=settings.DEEP_ANALYZER_MODEL,
                 deep_device=settings.DEEP_ANALYZER_DEVICE,
+                timings=job.timings,
             )
-            get_alert_index().add(payload)
+            if payload is not None:
+                metrics["timings"] = dict(job.timings)
+                payload["timings"] = dict(job.timings)
+                get_alert_index().add(payload)
 
 
 _engine: Optional[DeepAnalyzerEngine] = None

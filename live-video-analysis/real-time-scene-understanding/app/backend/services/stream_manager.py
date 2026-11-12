@@ -871,6 +871,7 @@ class StreamManager:
                             frame_id=frame_id,
                             trigger_caption=caption,
                             trigger_thumbnail_jpeg=trigger_thumbnail_jpeg,
+                            trigger_caption_ts=caption_ts,
                         )
                     except Exception as exc:  # noqa: BLE001 - model may be missing/misconfigured
                         logger.error("[%s] deep analyzer disabled: %s", stream_id, exc)

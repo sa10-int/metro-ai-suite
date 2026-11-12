@@ -140,6 +140,9 @@ class TestDeepAnalyzerSubmitFlow:
         queued_job = engine._queue.get_nowait()
         assert queued_job.segment_path == segment_path
         assert queued_job.stream_id == "stream-8"
+        assert "segment_finalized_ts" in queued_job.timings
+        assert "analysis_enqueued_ts" in queued_job.timings
+        assert queued_job.enqueued_monotonic is not None
 
     def test_submit_ignores_duplicates(self):
         engine = object.__new__(DeepAnalyzerEngine)
@@ -205,10 +208,16 @@ class TestDeepAnalyzerSubmitFlow:
         monkeypatch.setattr(engine, "_wait_for_next_segment", fake_wait)
         monkeypatch.setattr(deep_analyzer_module, "_sample_segment_frames", fake_sample)
 
-        frames = engine._read_segment_frames(_AnalysisJob(stream_id="s", segment_path="segments/s1.mp4", alert_event="fire", frame_id=uuid.uuid4()))
+        job = _AnalysisJob(stream_id="s", segment_path="segments/s1.mp4", alert_event="fire", frame_id=uuid.uuid4())
+        frames = engine._read_segment_frames(job)
 
         assert captured["called"] is True
         assert frames.shape == (2, 2)
+        assert "segment_ready_ts" in job.timings
+        assert "segment_readiness_wait_ms" in job.timings
+        assert "frame_sampling_started_ts" in job.timings
+        assert "frame_sampling_completed_ts" in job.timings
+        assert "frame_sampling_duration_ms" in job.timings
 
     def test_analyze_uploads_and_logs_result(self, monkeypatch):
         engine = object.__new__(DeepAnalyzerEngine)

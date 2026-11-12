@@ -54,6 +54,7 @@ def build_alert_router(alert_index, get_alert_s3_client, settings) -> APIRouter:
             ),
             "description": record.get("description", ""),
             "metrics": record.get("metrics", {}),
+            "timings": record.get("timings", {}),
             "model": record.get("model", ""),
             "device": record.get("device", ""),
             "uploaded_at": record.get("uploaded_at", ""),
