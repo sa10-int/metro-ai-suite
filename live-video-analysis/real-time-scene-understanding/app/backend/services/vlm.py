@@ -192,7 +192,7 @@ def parse_yes_no(caption: str) -> Optional[bool]:
 class _CaptionRequest:
     """One queued captioning request; the submitting thread blocks on `event`."""
 
-    __slots__ = ("rgb_frame", "prompt", "event", "result", "error")
+    __slots__ = ("rgb_frame", "prompt", "event", "result", "error", "timings", "enqueued_monotonic")
 
     def __init__(self, rgb_frame: np.ndarray, prompt: str) -> None:
         self.rgb_frame = rgb_frame
@@ -200,6 +200,8 @@ class _CaptionRequest:
         self.event = threading.Event()
         self.result: Optional[tuple[Optional[str], dict[str, Optional[float]]]] = None
         self.error: Optional[BaseException] = None
+        self.timings: dict[str, float] = {}
+        self.enqueued_monotonic: Optional[float] = None
 
 
 class DeepAnalyzerVLMRuntime:
@@ -389,11 +391,18 @@ class VLMEngine:
         """Single worker thread; the only caller of `_generate`, so no lock is needed there."""
         while True:
             _rank, _seq, request = self._queue.get()
+            request.timings["alert_vlm_started_ts"] = time.time()
+            started_monotonic = time.perf_counter()
+            if request.enqueued_monotonic is not None:
+                request.timings["alert_vlm_queue_wait_ms"] = max(
+                    0.0, (started_monotonic - request.enqueued_monotonic) * 1000.0
+                )
             try:
                 request.result = self._generate(request.rgb_frame, request.prompt)
             except Exception as exc:  # noqa: BLE001
                 request.error = exc
             finally:
+                request.timings["alert_vlm_completed_ts"] = time.time()
                 request.event.set()
 
     def _generate(
@@ -405,7 +414,12 @@ class VLMEngine:
         (see _format_alert_caption) -- callers should drop it for this cycle.
         """
         # GenAI expects a batched NHWC uint8 tensor.
+        preprocess_started = time.perf_counter()
+        metrics_started_ts = time.time()
         tensor = ov.Tensor(np.expand_dims(rgb_frame, axis=0))
+        metrics_completed_ts = time.time()
+        preprocess_duration_ms = (time.perf_counter() - preprocess_started) * 1000.0
+        inference_started_ts = time.time()
         t0 = time.perf_counter()
         result = self._pipe.generate(
             prompt_text + _RESPONSE_FORMAT_SUFFIX,
@@ -413,8 +427,19 @@ class VLMEngine:
             generation_config=self._gen_config,
         )
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
+        inference_completed_ts = time.time()
 
         metrics = utils._extract_perf_metrics(result)
+        metrics.update(
+            {
+                "alert_vlm_preprocess_started_ts": metrics_started_ts,
+                "alert_vlm_preprocess_completed_ts": metrics_completed_ts,
+                "alert_vlm_preprocess_duration_ms": preprocess_duration_ms,
+                "alert_vlm_generation_started_ts": inference_started_ts,
+                "alert_vlm_generation_completed_ts": inference_completed_ts,
+                "alert_vlm_generation_duration_ms": elapsed_ms,
+            }
+        )
         if metrics.get("ttft_ms") is None and not self._metrics_debug_logged:
             self._metrics_debug_logged = True
             logger.warning(
@@ -442,6 +467,8 @@ class VLMEngine:
             raise ValueError("prompt is required")
 
         request = _CaptionRequest(rgb_frame, prompt_text)
+        request.timings["alert_vlm_enqueued_ts"] = time.time()
+        request.enqueued_monotonic = time.perf_counter()
         rank = 0 if priority else 1
         self._queue.put((rank, next(self._seq_counter), request))
         request.event.wait()
@@ -453,7 +480,9 @@ class VLMEngine:
                 "Internal error: caption worker signalled completion without a "
                 "result or an error."
             )
-        return request.result
+        caption, metrics = request.result
+        metrics.update(request.timings)
+        return caption, metrics
 
     def caption(self, rgb_frame: np.ndarray, prompt: Optional[str] = None) -> Optional[str]:
         """Return a caption for one RGB frame (H×W×3, uint8), or None if truncated/malformed."""

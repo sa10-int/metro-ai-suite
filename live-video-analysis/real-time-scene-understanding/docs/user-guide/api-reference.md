@@ -84,6 +84,32 @@ Notes:
 			"reconnect_count": 0,
 			"whep_path": "/camera-lobby/whep",
 			"caption": "Yes",
+			"caption_history": [
+				{
+					"response": "Decision: Yes\\nDescription: Visible fire.",
+					"playback_seconds": 10.1,
+					"frame_id": "9dd96a2f-17b9-41a0-a1c5-e3f8f76b07a7",
+					"timings": {
+						"trigger_frame_decode_completed_ts": 1757240431.8,
+						"source_packet_decode_duration_ms": 4.1,
+						"trigger_frame_registered_ts": 1757240431.82,
+						"trigger_frame_pre_registration_ms": 20.0,
+						"alert_frame_selected_ts": 1757240431.9,
+						"alert_frame_selection_wait_ms": 80.0,
+						"alert_frame_rgb_conversion_duration_ms": 1.5,
+						"alert_vlm_enqueued_ts": 1757240431.91,
+						"alert_vlm_started_ts": 1757240431.95,
+						"alert_vlm_queue_wait_ms": 40.0,
+						"alert_vlm_generation_started_ts": 1757240431.96,
+						"alert_vlm_generation_completed_ts": 1757240432.11,
+						"alert_vlm_generation_duration_ms": 150.0,
+						"alert_vlm_completed_ts": 1757240432.115,
+						"trigger_caption_ts": 1757240432.117,
+						"caption_published_ts": 1757240432.117,
+						"alert_trigger_latency_ms": 297.0
+					}
+				}
+			],
 			"caption_ts": 1757240432.117,
 			"ttft_ms": 73.2,
 			"tpot_ms": 18.7,
@@ -142,7 +168,26 @@ Notes:
 		"throughput_tps": 50.4
 	},
 	"timings": {
+		"trigger_frame_decode_completed_ts": 1788791839.9,
+		"source_packet_decode_duration_ms": 4.1,
+		"trigger_frame_registered_ts": 1788791839.92,
+		"trigger_frame_pre_registration_ms": 20.0,
+		"alert_frame_selected_ts": 1788791839.99,
+		"alert_frame_selection_wait_ms": 70.0,
+		"alert_frame_rgb_conversion_duration_ms": 1.5,
+		"alert_vlm_enqueued_ts": 1788791840.0,
+		"alert_vlm_started_ts": 1788791840.04,
+		"alert_vlm_queue_wait_ms": 40.0,
+		"alert_vlm_preprocess_started_ts": 1788791840.04,
+		"alert_vlm_preprocess_completed_ts": 1788791840.05,
+		"alert_vlm_preprocess_duration_ms": 10.0,
+		"alert_vlm_generation_started_ts": 1788791840.05,
+		"alert_vlm_generation_completed_ts": 1788791840.1,
+		"alert_vlm_generation_duration_ms": 50.0,
+		"alert_vlm_completed_ts": 1788791840.11,
+		"alert_trigger_latency_ms": 100.0,
 		"trigger_caption_ts": 1788791840.1,
+		"caption_published_ts": 1788791840.1,
 		"segment_finalized_ts": 1788791845.0,
 		"segment_finalize_wait_ms": 4900.0,
 		"analysis_enqueued_ts": 1788791845.0,
@@ -173,9 +218,31 @@ seconds; fields ending in `_ms` are durations in milliseconds. `uploaded_at`
 is retained for compatibility and is set before the storage upload tasks begin.
 Use `timings.storage_upload_completed_ts` for artifact-upload completion and
 `timings.alert_indexed_ts` for the server-side alert-index insertion time.
+Each `caption_history` entry includes Alert VLM timing for that check, whether
+its decision was Yes or No. The matching Yes check's timings are also copied
+into its deep-alert detail record.
 
 | Field | Stage | Purpose |
 | --- | --- | --- |
+| `trigger_frame_decode_completed_ts` | Video decode | Time PyAV completed decoding the packet containing the trigger frame. |
+| `source_packet_decode_duration_ms` | Video decode | Time spent decoding that source packet; shared by its decoded frames. |
+| `trigger_frame_registered_ts` | Frame registry | Time the trigger frame was registered for stream processing. |
+| `trigger_frame_pre_registration_ms` | Video processing | Time from packet decode completion to frame registration, including frame conversion and relay/segment work. |
+| `alert_frame_selected_ts` | Alert VLM input | Time this sampled frame was selected for alert analysis. |
+| `alert_frame_selection_wait_ms` | Alert VLM input | Time from frame registration until selection for alert analysis. |
+| `alert_frame_rgb_conversion_duration_ms` | Alert VLM input | Time to convert the selected frame to the VLM input format. |
+| `alert_vlm_enqueued_ts` | Alert VLM | Time the request entered the shared VLM queue. |
+| `alert_vlm_started_ts` | Alert VLM | Time the dispatcher began handling the request. |
+| `alert_vlm_queue_wait_ms` | Alert VLM | Time the request waited in the VLM queue. |
+| `alert_vlm_preprocess_started_ts` | Alert VLM | Time input tensor preparation began. |
+| `alert_vlm_preprocess_completed_ts` | Alert VLM | Time input tensor preparation completed. |
+| `alert_vlm_preprocess_duration_ms` | Alert VLM | Time spent preparing the model input tensor. |
+| `alert_vlm_generation_started_ts` | Alert VLM | Time alert-model generation began. |
+| `alert_vlm_generation_completed_ts` | Alert VLM | Time alert-model generation ended. |
+| `alert_vlm_generation_duration_ms` | Alert VLM | Wall-clock time spent in the alert model's generate call. |
+| `alert_vlm_completed_ts` | Alert VLM | Time the dispatcher completed the request and returned its response. |
+| `alert_trigger_latency_ms` | Alert VLM | Time from trigger-frame registration to caption publication; corresponds to the benchmark's matched-trigger latency. |
+| `caption_published_ts` | Stream/API | Time the caption was published to stream state and caption history. |
 | `trigger_caption_ts` | Alert VLM | Time the alert caption was produced; reference point for segment-finalization wait. |
 | `segment_finalized_ts` | Stream/segment handoff | Time the segment containing the trigger frame was finalized. |
 | `segment_finalize_wait_ms` | Alert-to-segment handoff | Time from the alert caption to segment finalization. |

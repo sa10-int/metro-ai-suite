@@ -40,7 +40,10 @@ class TestVLMGenerate:
         caption, metrics = engine._generate(np.zeros((2, 3, 3), dtype="uint8"), "watch the door")
 
         assert caption == "Decision: Yes\nDescription: Person near door."
-        assert metrics == {"ttft_ms": 4.0}
+        assert metrics["ttft_ms"] == 4.0
+        assert metrics["alert_vlm_generation_duration_ms"] >= 0
+        assert metrics["alert_vlm_generation_completed_ts"] >= metrics["alert_vlm_generation_started_ts"]
+        assert metrics["alert_vlm_preprocess_duration_ms"] >= 0
         assert captured["prompt"] == "watch the door" + vlm._RESPONSE_FORMAT_SUFFIX
         assert captured["tensor"].shape == (1, 2, 3, 3)
         assert captured["images"]
@@ -212,6 +215,7 @@ class TestVLMRequestAPI:
         result = engine.caption_with_metrics(frame, prompt=" prompt ", priority=True)
 
         assert result[0].startswith("Decision: Yes")
+        assert "alert_vlm_enqueued_ts" in result[1]
         assert captured["item"][:2] == (0, 7)
 
     def test_caption_with_metrics_raises_worker_error(self):
@@ -251,6 +255,8 @@ class TestVLMRequestAPI:
             prompt = "prompt"
             result = None
             error = None
+            timings = {}
+            enqueued_monotonic = vlm.time.perf_counter() - 0.01
 
             class _Event:
                 def __init__(self):
@@ -281,3 +287,6 @@ class TestVLMRequestAPI:
 
         assert isinstance(request.error, RuntimeError)
         assert request.event.was_set is True
+        assert "alert_vlm_started_ts" in request.timings
+        assert request.timings["alert_vlm_queue_wait_ms"] >= 0
+        assert "alert_vlm_completed_ts" in request.timings

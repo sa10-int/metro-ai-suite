@@ -186,6 +186,7 @@ class StreamManager:
         self._latest_frame = None  # np.ndarray (H×W×3, RGB) or None
         self._latest_frame_ts: float = 0.0  # monotonic; 0 = no frame yet
         self._latest_frame_id: Optional[uuid.UUID] = None  # ties back to the registered FrameRecord
+        self._latest_frame_timings: dict[str, float] = {}
         self._caption_history: deque[dict[str, Any]] = deque(maxlen=_CAPTION_HISTORY_LIMIT)
         self._playback_start_ts: float = 0.0
 
@@ -560,7 +561,10 @@ class StreamManager:
                     backward = 0
                     last_dts = dts
 
+                    decode_started = time.perf_counter()
                     decoded_frames = packet.decode()
+                    packet_decode_duration_ms = (time.perf_counter() - decode_started) * 1000.0
+                    packet_decode_completed_ts = time.time()
 
                     now = monotonic()
                     if now >= next_health_ts:
@@ -623,15 +627,14 @@ class StreamManager:
 
                         if frame_count % sample_every == 0:
                             frame_id = new_uuid()
-                            register(
-                                FrameRecord(
-                                    frame_id=frame_id,
-                                    stream_id=stream_id,
-                                    rtsp_url=source_url,
-                                    segment_path=last_segment_path,
-                                    pts_seconds=pts_seconds,
-                                )
+                            frame_record = FrameRecord(
+                                frame_id=frame_id,
+                                stream_id=stream_id,
+                                rtsp_url=source_url,
+                                segment_path=last_segment_path,
+                                pts_seconds=pts_seconds,
                             )
+                            register(frame_record)
                             logger.info(
                                 "[%s] registered frame_id=%s segment=%s pts=%.2fs",
                                 stream_id,
@@ -650,11 +653,31 @@ class StreamManager:
                                     # is a pointer swap; the worker only ever
                                     # reads the array it was handed, so the
                                     # buffer is never mutated underneath it.
+                                    rgb_conversion_started = time.perf_counter()
                                     rgb = frame.to_ndarray(format="rgb24")
+                                    rgb_conversion_duration_ms = (
+                                        time.perf_counter() - rgb_conversion_started
+                                    ) * 1000.0
+                                    frame_selected_ts = time.time()
                                     with frame_lock:
                                         self._latest_frame = rgb
                                         self._latest_frame_ts = now
                                         self._latest_frame_id = frame_id
+                                        self._latest_frame_timings = {
+                                            "trigger_frame_decode_completed_ts": packet_decode_completed_ts,
+                                            "source_packet_decode_duration_ms": packet_decode_duration_ms,
+                                            "trigger_frame_registered_ts": frame_record.created_ts,
+                                            "trigger_frame_pre_registration_ms": max(
+                                                0.0,
+                                                (frame_record.created_ts - packet_decode_completed_ts) * 1000.0,
+                                            ),
+                                            "alert_frame_selected_ts": frame_selected_ts,
+                                            "alert_frame_selection_wait_ms": max(
+                                                0.0,
+                                                (frame_selected_ts - frame_record.created_ts) * 1000.0,
+                                            ),
+                                            "alert_frame_rgb_conversion_duration_ms": rgb_conversion_duration_ms,
+                                        }
                                     frame_event.set()
                                     logger.info(
                                         "[%s] handed frame_id=%s to VLM inference worker",
@@ -792,6 +815,7 @@ class StreamManager:
                 frame = self._latest_frame
                 frame_ts = self._latest_frame_ts
                 frame_id = self._latest_frame_id
+                frame_timings = dict(self._latest_frame_timings)
 
             if frame is None or frame_ts == processed_ts:
                 continue  # nothing new to caption yet
@@ -824,6 +848,17 @@ class StreamManager:
             # Resolve everything before taking the lock so the health lock is
             # held for assignments only — API readers contend on it.
             caption_ts = time.time()
+            caption_timings = {
+                **frame_timings,
+                **{key: value for key, value in metrics.items() if key.startswith("alert_vlm_")},
+                "trigger_caption_ts": caption_ts,
+                "caption_published_ts": caption_ts,
+            }
+            registered_ts = caption_timings.get("trigger_frame_registered_ts")
+            if registered_ts is not None:
+                caption_timings["alert_trigger_latency_ms"] = max(
+                    0.0, (caption_ts - registered_ts) * 1000.0
+                )
             playback_seconds = max(0.0, frame_ts - self._playback_start_ts)
             ttft_ms = metrics.get("ttft_ms")
             tpot_ms = metrics.get("tpot_ms")
@@ -834,6 +869,8 @@ class StreamManager:
                     {
                         "response": caption,
                         "playback_seconds": playback_seconds,
+                        "frame_id": str(frame_id) if frame_id is not None else "",
+                        "timings": caption_timings,
                     }
                 )
                 self.health.caption = caption
@@ -872,6 +909,7 @@ class StreamManager:
                             trigger_caption=caption,
                             trigger_thumbnail_jpeg=trigger_thumbnail_jpeg,
                             trigger_caption_ts=caption_ts,
+                            trigger_timings=caption_timings,
                         )
                     except Exception as exc:  # noqa: BLE001 - model may be missing/misconfigured
                         logger.error("[%s] deep analyzer disabled: %s", stream_id, exc)

@@ -55,7 +55,11 @@ class TestListStreams:
         manager.get_health.return_value = StreamHealth(
             caption="Yes",
             caption_history=[
-                {"response": "Yes", "playback_seconds": 10.1},
+                {
+                    "response": "Yes",
+                    "playback_seconds": 10.1,
+                    "timings": {"alert_vlm_queue_wait_ms": 4.2},
+                },
                 {"response": "No", "playback_seconds": 9.1},
                 {"response": "Yes", "playback_seconds": 8.1},
             ],
@@ -70,6 +74,7 @@ class TestListStreams:
         stream = response.json()["streams"][0]
         assert stream["caption"] == "Yes"
         assert stream["caption_history"][0]["response"] == "Yes"
+        assert stream["caption_history"][0]["timings"]["alert_vlm_queue_wait_ms"] == 4.2
         assert stream["caption_history"][1]["response"] == "No"
 
     def test_returns_empty_list_when_no_streams(self):

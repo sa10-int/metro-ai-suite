@@ -264,6 +264,9 @@ class TestStreamManagerHelpers:
         mgr._latest_frame = __import__("numpy").zeros((2, 2, 3), dtype="uint8")
         mgr._latest_frame_ts = 1.0
         mgr._latest_frame_id = "frame-1"
+        mgr._latest_frame_timings = {
+            "trigger_frame_registered_ts": __import__("time").time() - 0.02
+        }
         mgr.frame_registry = type("Registry", (), {"get_segment": lambda self, fid: "segments/seg_001.mp4"})()
 
         class _FakeEvent:
@@ -279,13 +282,19 @@ class TestStreamManagerHelpers:
 
         class _FakeEngine:
             def caption_with_metrics(self, frame, prompt=None, priority=False):
-                return "Decision: Yes\nDescription: Visible fire.", {"ttft_ms": 10.0, "tpot_ms": 2.0, "throughput_tps": 12.0, "total_tokens_generated": 21.0}
+                return "Decision: Yes\nDescription: Visible fire.", {
+                    "ttft_ms": 10.0,
+                    "tpot_ms": 2.0,
+                    "throughput_tps": 12.0,
+                    "total_tokens_generated": 21.0,
+                    "alert_vlm_queue_wait_ms": 5.0,
+                }
 
         called = []
 
         class _FakeDA:
             def submit(self, **kwargs):
-                called.append(kwargs["segment_path"])
+                called.append((kwargs["segment_path"], kwargs["trigger_timings"]))
 
         monkeypatch.setattr(stream_manager_module, "get_vlm_engine", lambda: _FakeEngine())
         monkeypatch.setattr(stream_manager_module, "parse_yes_no", lambda caption: True)
@@ -295,7 +304,11 @@ class TestStreamManagerHelpers:
 
         mgr._infer_worker()
 
-        assert called == ["segments/seg_001.mp4"]
+        assert called[0][0] == "segments/seg_001.mp4"
+        assert "trigger_frame_registered_ts" in called[0][1]
+        assert "alert_vlm_queue_wait_ms" in called[0][1]
+        assert 0.0 <= called[0][1]["alert_trigger_latency_ms"] < 500.0
+        assert mgr.health.caption_history[0]["timings"] == called[0][1]
 
     def test_encode_frame_jpeg_bytes_returns_encoded_payload(self, monkeypatch):
         frame = np.zeros((4, 4, 3), dtype="uint8")

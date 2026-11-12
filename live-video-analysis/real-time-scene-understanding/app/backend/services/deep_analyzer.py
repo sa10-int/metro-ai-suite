@@ -239,6 +239,7 @@ class DeepAnalyzerEngine:
         trigger_caption: str = "",
         trigger_thumbnail_jpeg: bytes = b"",
         trigger_caption_ts: Optional[float] = None,
+        trigger_timings: Optional[dict[str, float]] = None,
     ) -> None:
         """Register a "Yes"-verdict segment for deep analysis, at most once."""
         job = _AnalysisJob(
@@ -250,6 +251,7 @@ class DeepAnalyzerEngine:
             trigger_caption=trigger_caption,
             trigger_thumbnail_jpeg=trigger_thumbnail_jpeg,
         )
+        job.timings.update(trigger_timings or {})
         job.timings["trigger_caption_ts"] = trigger_caption_ts if trigger_caption_ts is not None else time.time()
         with self._lock:
             if segment_path in self._dedup:
